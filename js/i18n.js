@@ -8,6 +8,14 @@ export const translations = {
     membershipBtn: "سجل كعضو",
     tagline: "أكل بيتي مغربي أصيل — بنين، سخون، ويوصل حتى لباب دارك",
     heroCta: "اطلب وجبتك الآن",
+    chipFresh: "🌿 طازج كل يوم",
+    chipDelivery: "🛵 توصيل في برشيد",
+    chipCod: "💵 الدفع عند الاستلام",
+    categoriesAria: "فئات الأطباق",
+    heroChipsAria: "مزايا الخدمة",
+    menuEyebrow: "قائمتنا",
+    menuTitle: "اختار وجبتك",
+    menuSubtitle: "أطباق بيتية كتحضّر كل يوم بمكونات طازجة — زيدها للسلة بضغطة واحدة.",
     dailyMealCta: "اطلب الآن",
     skipLink: "تخطي إلى المحتوى",
     logoAria: "وجبتنا — العودة إلى الصفحة الرئيسية",
@@ -314,6 +322,14 @@ export const translations = {
     membershipBtn: "Devenir membre",
     tagline: "Cuisine marocaine maison authentique — savoureuse, chaude, livrée à votre porte",
     heroCta: "Commander maintenant",
+    chipFresh: "🌿 Frais chaque jour",
+    chipDelivery: "🛵 Livraison à Berrechid",
+    chipCod: "💵 Paiement à la livraison",
+    categoriesAria: "Catégories de plats",
+    heroChipsAria: "Avantages du service",
+    menuEyebrow: "Notre carte",
+    menuTitle: "Choisissez votre plat",
+    menuSubtitle: "Des plats maison préparés chaque jour avec des ingrédients frais — ajoutez-les au panier en un clic.",
     dailyMealCta: "Commander",
     skipLink: "Aller au contenu",
     logoAria: "Wajbatna — Retour à l'accueil",
@@ -615,6 +631,14 @@ export const translations = {
 };
 
 export function getLang() {
+  // ?lang=fr / ?lang=ar كيسمح بمشاركة رابط بلغة محددة (وكيخدم مع hreflang لمحركات البحث)
+  try {
+    const q = new URLSearchParams(location.search).get("lang");
+    if (q === "fr" || q === "ar") {
+      try { localStorage.setItem("wajba_lang", q); } catch (e) {}
+      return q;
+    }
+  } catch (e) {}
   try {
     const l = localStorage.getItem("wajba_lang");
     return l === "fr" ? "fr" : "ar";

@@ -1,0 +1,6 @@
+# وجبتنا — Wajbatna
+User-agent: *
+Allow: /
+Disallow: /admin.html
+
+Sitemap: https://wajbatna-c83ee.web.app/sitemap.xml

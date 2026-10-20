@@ -1,5 +1,6 @@
 // admin.js — منطق لوحة التحكم (يتطلب تسجيل دخول عبر Firebase Authentication)
 import { db, auth } from "./firebase.js";
+import { escapeHtml, escapeAttr, orderCode, ico } from "./utils.js";
 import {
   collection,
   addDoc,
@@ -49,16 +50,6 @@ function paymentIconHtml(pm) {
 
 function money(n) {
   return Math.round(n).toLocaleString("ar-MA") + " درهم";
-}
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c]));
-}
-function escapeAttr(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 // روابط وتصاوير جاية من الزبناء: ما كنقبلو إلا https:// للروابط و data:image base64 للتصاوير (حماية من حقن جافاسكريبت فلوحة الأدمين)
 function safeHttpUrl(u) {
@@ -219,9 +210,6 @@ function navTo(tab) {
 function logoutFromMenu() {
   closeSidebar();
   logout();
-}
-function ico(name) {
-  return `<img src="img/icons/${name}.webp" alt="" width="24" height="24" style="width:1.35em;height:1.35em;vertical-align:-0.32em;margin-inline-end:.3em;display:inline-block;object-fit:contain">`;
 }
 function renderAdminSidebar() {
   const body = document.getElementById("sidebarBody");
@@ -402,10 +390,7 @@ function orderStatusBadge(status) {
   const key = orderStatusKey(status);
   return `<span class="status-badge status-${key}">${ORDER_STATUS_LABELS[key]}</span>`;
 }
-// رقم طلب مختصر وقابل للقراءة مشتق من معرّف الوثيقة (نفس المنطق فـ app.js حتى يتطابق الرقم فالجهتين)
-function orderCode(id) {
-  return "WJ-" + String(id || "").slice(0, 8).toUpperCase();
-}
+// رقم الطلب كيجي من utils.js (نفس المنطق فـ app.js حتى يتطابق الرقم فالجهتين)
 // الطلب يقدر "يتقبل" غير إلا كانت الحالة الافتراضية أو غير محددة (الطلبات القديمة بلا status)
 function canAcceptOrder(status) {
   return !status || status === "قيد المراجعة";
