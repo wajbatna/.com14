@@ -1,0 +1,21 @@
+# نظام
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# أدوات وبناء
+node_modules/
+.firebase/
+*.log
+npm-debug.log*
+
+# محرر
+.vscode/
+.idea/
+*.swp
+
+# أسرار محلية (لا تُرفع أبداً)
+.env
+.env.*
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
