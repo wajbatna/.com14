@@ -13,9 +13,13 @@
 // -----------------------------------------------------------------------
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
-import { getFirestore } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+import {
+  initializeFirestore,
+  getFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { getAuth } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
-import { getAnalytics, isSupported } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-analytics.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCLNN2ejx6BDwGgwdkKGLfL3odS2i_V5Rc",
@@ -30,11 +34,26 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
-export const db = getFirestore(app);
+// تخزين محلي دائم (IndexedDB): القائمة كتظهر فوراً فالزيارات القادمة وكتخدم بلا إنترنت،
+// والتغييرات كتتزامن وحدها ملي يرجع الاتصال. إلا ما دعمش المتصفح، كنرجعو للتخزين العادي.
+export const db = (() => {
+  try {
+    return initializeFirestore(app, {
+      localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    });
+  } catch (e) {
+    return getFirestore(app);
+  }
+})();
 export const auth = getAuth(app);
 
-// Analytics تخدم غير فدومين حقيقي منشور (ماشي فمعاينة/localhost)، فهاد الفحص كيمنع أخطاء فالكونسول
-isSupported().then((ok) => {
-  if (ok) getAnalytics(app);
-});
-
+// Analytics تخدم غير فدومين حقيقي منشور (ماشي فمعاينة/localhost)، فهاد الفحص كيمنع أخطاء فالكونسول.
+// كتتحمّل بشكل مؤجل باش ما تأثرش على سرعة أول رسم للصفحة.
+const loadAnalytics = () => {
+  if (!firebaseConfig.measurementId) return;
+  import("https://www.gstatic.com/firebasejs/12.18.0/firebase-analytics.js")
+    .then(({ getAnalytics, isSupported }) => isSupported().then((ok) => ok && getAnalytics(app)))
+    .catch(() => {});
+};
+if (document.readyState === "complete") setTimeout(loadAnalytics, 1200);
+else window.addEventListener("load", () => setTimeout(loadAnalytics, 1200), { once: true });

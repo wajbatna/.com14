@@ -2,6 +2,21 @@
 import { db, auth } from "./firebase.js";
 import { getLang, setLang, t } from "./i18n.js";
 import {
+  escapeHtml,
+  escapeAttr,
+  jsArg,
+  isoOf,
+  todayISO,
+  phoneToEmail,
+  normalizePhone,
+  PHONE_RE,
+  orderCode,
+  ico,
+  iconize,
+  splitIcon,
+  cssEscape,
+} from "./utils.js";
+import {
   collection,
   onSnapshot,
   addDoc,
@@ -62,7 +77,6 @@ function paymentIconHtml(pm) {
 }
 // الحد الأدنى لعدد أيام الطلب باش يستحق الزبون بطاقة العضوية تلقائياً
 const MEMBERSHIP_MIN_DAYS = 3;
-const PHONE_RE = /^(0[5-7]\d{8}|\+212[5-7]\d{8})$/;
 
 // قواعد احتساب النقاط الافتراضية — الأدمين يقدر يبدلها من config/pointsRules،
 // وإلا ما كايناش وثيقة، هاد القيم هي لي كتخدم
@@ -116,7 +130,7 @@ function renderWeeklyPackages() {
         <span class="weekly-pack-price">${price} ${isFr ? "DH / jour" : "درهم / اليوم"}</span>
       </div>
       <div class="weekly-days">${dayChips}</div>
-      <button type="button" class="weekly-pack-cta" onclick="orderWeeklyPack('${packId}')">${isFr ? "Commander cette formule" : "اطلب هاد الباقة"}</button>
+      <button type="button" class="weekly-pack-cta" onclick="orderWeeklyPack(${jsArg(packId)})">${isFr ? "Commander cette formule" : "اطلب هاد الباقة"}</button>
     </div>`;
   };
   el.innerHTML = packCard("kids", "باقة الأطفال", "Formule Enfants", ico("enfant")) + packCard("adults", "باقة الكبار", "Formule Adultes", ico("jeune-adulte"));
@@ -125,7 +139,34 @@ function renderWeeklyPackages() {
 let lang = getLang();
 let meals = [];
 let dailyMealImage = "";
-let cart = {};
+// السلة كتبقى محفوظة فالهاتف (localStorage) حتى إلا سد الزبون الصفحة أو عاود فتحها من بعد.
+// كنحفظو غير المعرّفات والكميات — الأثمنة كتترجع دائماً من قائمة الأطباق الحية.
+const CART_KEY = "wajba_cart_v1";
+function loadCart() {
+  try {
+    const raw = localStorage.getItem(CART_KEY);
+    if (!raw) return {};
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+    const out = {};
+    for (const [id, qty] of Object.entries(data)) {
+      const n = Math.floor(Number(qty));
+      if (typeof id === "string" && id && Number.isFinite(n) && n > 0) out[id] = Math.min(n, 99);
+    }
+    return out;
+  } catch (e) {
+    return {};
+  }
+}
+function saveCart() {
+  try {
+    if (Object.keys(cart).length) localStorage.setItem(CART_KEY, JSON.stringify(cart));
+    else localStorage.removeItem(CART_KEY);
+  } catch (e) {
+    /* التخزين ممتلئ أو غير متاح — السلة كتخدم عادي فهاد الجلسة */
+  }
+}
+let cart = loadCart();
 let category = "all",
   plan = "weekly";
 // طرق الأداء: الإعدادات (RIB/تفعيل) جاية من config/paymentMethods، والطريقة المختارة فالطلب الحالي
@@ -156,17 +197,6 @@ let hasUnreadSupport = false; // حالة وجود رسائل دعم غير مق
 const googleProvider = new GoogleAuthProvider();
 const appleProvider = new OAuthProvider("apple.com");
 
-function phoneToEmail(phone) {
-  return `${phone}@wajbati.app`;
-}
-function normalizePhone(raw) {
-  // كيحول أي صيغة (+212612345678 / 212612345678 / 0612345678) لنفس الصيغة الموحدة
-  // باش نفس رقم الهاتف يعطي دائماً نفس "الإيميل المصطنع"، فتسجيل الدخول يخدم بجد
-  let p = String(raw || "").replace(/[\s-]/g, "").trim();
-  if (p.startsWith("+212")) p = "0" + p.slice(4);
-  else if (p.startsWith("212") && p.length === 12) p = "0" + p.slice(3);
-  return p;
-}
 function avatarFor(gender) {
   return gender === "female" ? "👩" : "👨";
 }
@@ -236,6 +266,7 @@ function orderWeeklyPack(packId) {
   cart = { ["pack:" + packId]: 1 };
   plan = "weekly";
   lastTouchedId = "pack:" + packId;
+  saveCart();
   render();
   const tt = PACK_TITLES[packId];
   toast(t(lang).toastAdded(lang === "fr" ? tt.fr : tt.ar));
@@ -262,16 +293,6 @@ function checkoutTotal() {
 }
 function count() {
   return Object.values(cart).reduce((a, b) => a + b, 0);
-}
-function escapeHtml(s) {
-  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[c]));
-}
-function escapeAttr(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
 }
 // كينسخ نص لحافظة الجهاز (RIB أو اسم صاحب الحساب) وكيبين ✓ فالزر لمدة قصيرة كتأكيد للزبون
 function copyToClipboard(btn) {
@@ -303,10 +324,6 @@ function fallbackCopy(text, cb) {
   }
   document.body.removeChild(ta);
   if (cb) cb();
-}
-// رقم طلب مختصر وقابل للقراءة مشتق من معرّف الوثيقة فـ Firestore (بلا الحاجة لعداد مركزي جديد)
-function orderCode(id) {
-  return "WJ-" + String(id || "").slice(0, 8).toUpperCase();
 }
 // نسخ رقم الطلب لحافظة الجهاز (يخدم فـ Android وiPhone والكمبيوتر) مع تنبيه تأكيدي
 function copyOrderNumber(btn) {
@@ -433,22 +450,24 @@ function applyStaticText() {
   });
   const dmImg = document.getElementById("dailyMealImg");
   if (dmImg) dmImg.alt = s.dailyMealBadge;
-  document.title = lang === "fr" ? "Wajbatna — Cuisine marocaine maison authentique" : "وجبتنا — أكل بيتي مغربي أصيل";
+  const metaDesc = lang === "fr"
+    ? "Wajbatna : plats marocains maison frais (petit-déjeuner, déjeuner, dîner) livrés à Berrechid. Formules hebdomadaires et mensuelles jusqu'à -20%, paiement à la livraison et programme de fidélité."
+    : "وجبتنا: وجبات مغربية بيتية طازجة (فطور، غداء، عشاء) بتوصيل سريع في برشيد. باقات أسبوعية وشهرية بخصم حتى 20%، الدفع عند الاستلام، وبرنامج نقاط ومكافآت.";
+  document.title = lang === "fr" ? "Wajbatna — Cuisine marocaine maison, livraison à Berrechid" : "وجبتنا — أكل بيتي مغربي أصيل، توصيل في برشيد";
+  const descEl = document.querySelector('meta[name="description"]');
+  if (descEl) descEl.setAttribute("content", metaDesc);
+  const ogDesc = document.querySelector('meta[property="og:description"]');
+  if (ogDesc) ogDesc.setAttribute("content", metaDesc);
   updateAccountButton();
 }
 
 /* ---------- القائمة الجانبية (☰) بدل أزرار رأس الصفحة ---------- */
-// يفصل الإيموجي الأول عن النص (النصوص فالترجمة كلها بصيغة "إيموجي نص")
-function splitIcon(str) {
-  const idx = (str || "").indexOf(" ");
-  if (idx === -1) return { icon: "", text: str || "" };
-  return { icon: str.slice(0, idx), text: str.slice(idx + 1) };
-}
 
 function openSidebar() {
   renderSidebar();
   const sb = document.getElementById("sidebar");
   sb.classList.add("show");
+  sb.removeAttribute("inert");
   sb.setAttribute("aria-hidden", "false");
   document.getElementById("sidebarOverlay").classList.add("show");
   document.getElementById("menuBtn").setAttribute("aria-expanded", "true");
@@ -459,6 +478,7 @@ function closeSidebar() {
   const sb = document.getElementById("sidebar");
   const wasOpen = sb.classList.contains("show");
   sb.classList.remove("show");
+  sb.setAttribute("inert", "");
   sb.setAttribute("aria-hidden", "true");
   document.getElementById("sidebarOverlay").classList.remove("show");
   document.getElementById("menuBtn").setAttribute("aria-expanded", "false");
@@ -496,6 +516,20 @@ function closeTopModal() {
 }
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeTopModal();
+  if (e.key !== "Tab") return;
+  // حبس التركيز داخل النافذة/القائمة المفتوحة (وصول أفضل للوحة المفاتيح وقارئات الشاشة)
+  const box = document.querySelector(".modal.show .modal-box") || (document.getElementById("sidebar")?.classList.contains("show") ? document.getElementById("sidebar") : null);
+  if (!box) return;
+  const items = [...box.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && (document.activeElement === first || !box.contains(document.activeElement))) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && (document.activeElement === last || !box.contains(document.activeElement))) {
+    e.preventDefault();
+    first.focus();
+  }
 });
 document.querySelectorAll(".modal").forEach((m) => {
   let downOnBackdrop = false;
@@ -522,15 +556,6 @@ function openSidebarAction(fnName) {
   window[fnName]();
 }
 
-function ico(name) {
-  return `<img src="img/icons/${name}.webp" alt="" width="24" height="24" style="width:1.35em;height:1.35em;vertical-align:-0.32em;margin-inline-end:.3em;display:inline-block;object-fit:contain">`;
-}
-const ICON_EMOJI_RE = /🎫|👤|🎁|💬|📦|⚙/g;
-const ICON_BY_EMOJI = { "🎫": "card", "👤": "account", "🎁": "rewards", "💬": "support", "📦": "orders", "⚙": "settings" };
-// كيعوض الإيموجي القديمة (مثلا المحفوظة فسجل النقاط) بالأيقونات الجديدة
-function iconize(html) {
-  return String(html ?? "").replace(ICON_EMOJI_RE, (m) => ico(ICON_BY_EMOJI[m]));
-}
 // أيقونات القائمة الجانبية (صور 3D بدل الإيموجي)
 const sideImg = (name) => `<img class="side-icon-img" src="img/icons/${name}.webp" alt="" width="44" height="44" decoding="async" loading="lazy">`;
 
@@ -612,14 +637,27 @@ function mealName(id) {
   if (id.startsWith("pack:")) return packItem(id, 1)?.name || "";
   return meals.find((x) => x.id === id)?.name || "";
 }
+// كتحدّث غير البطاقة اللي تبدلت (بدل إعادة رسم القائمة كاملة) — أسرع بزاف وبلا ما تتقاد الصور
+function refreshMealCtrl(id) {
+  const m = meals.find((x) => x.id === id);
+  if (!m) return;
+  const box = document.querySelector(`.meal[data-meal-id="${cssEscape(id)}"] .meal-ctrl`);
+  if (box) box.innerHTML = mealCtrlHtml(m, t(lang));
+}
 function add(id) {
-  if (!id.startsWith("pack:") && cartHasPack()) {
+  const hadPack = cartHasPack();
+  if (!id.startsWith("pack:") && hadPack) {
     Object.keys(cart).forEach((k) => k.startsWith("pack:") && delete cart[k]);
   }
   const first = !cart[id];
-  cart[id] = (cart[id] || 0) + 1;
+  cart[id] = Math.min((cart[id] || 0) + 1, 99);
   lastTouchedId = id;
-  render();
+  saveCart();
+  if (hadPack !== cartHasPack()) render(); // تبدّل نوع السلة (باقة ↔ أطباق) فخاص القائمة كاملة تتحدث
+  else {
+    renderCart();
+    refreshMealCtrl(id);
+  }
   setTimeout(() => (lastTouchedId = null), 600);
   if (first) toast(t(lang).toastAdded(mealName(id)));
   bump(document.getElementById("headerCartCount"));
@@ -627,29 +665,35 @@ function add(id) {
 }
 function remove(id) {
   lastTouchedId = id;
-  if (cart[id] > 1) {
-    cart[id]--;
-    render();
-  } else {
-    delete cart[id];
-    render();
-    toast(t(lang).toastRemoved);
-  }
+  if (cart[id] > 1) cart[id]--;
+  else delete cart[id], toast(t(lang).toastRemoved);
+  saveCart();
+  renderCart();
+  refreshMealCtrl(id);
 }
 function removeAll(id) {
   delete cart[id];
-  render();
+  saveCart();
+  renderCart();
+  refreshMealCtrl(id);
   toast(t(lang).toastRemoved);
 }
 
 function qtyControl(m, s) {
   const pop = lastTouchedId === m.id ? " pop" : "";
-  return `<div class="qty${pop}" role="group" aria-label="${escapeAttr(m.name)}"><button type="button" aria-label="${escapeAttr(s.minusAria(m.name))}" onclick="remove('${m.id}')">−</button><b aria-live="polite">${cart[m.id]}</b><button type="button" class="plus" aria-label="${escapeAttr(s.plusAria(m.name))}" onclick="add('${m.id}')">+</button></div>`;
+  return `<div class="qty${pop}" role="group" aria-label="${escapeAttr(m.name)}"><button type="button" aria-label="${escapeAttr(s.minusAria(m.name))}" onclick="remove(${jsArg(m.id)})">−</button><b aria-live="polite">${cart[m.id]}</b><button type="button" class="plus" aria-label="${escapeAttr(s.plusAria(m.name))}" onclick="add(${jsArg(m.id)})">+</button></div>`;
+}
+// زر "إضافة" أو عدّاد الكمية حسب حالة السلة — مستعمل فالبطاقة وفالتحديث الموضعي
+function mealCtrlHtml(m, s) {
+  return cart[m.id]
+    ? qtyControl(m, s)
+    : `<button type="button" class="add" aria-label="${escapeAttr(s.addBtn + " — " + m.name)}" onclick="add(${jsArg(m.id)})">${s.addBtn}</button>`;
 }
 function renderMeals() {
   const s = t(lang);
   const list = filtered();
   const el = document.getElementById("meals");
+  el.setAttribute("aria-busy", "false");
   if (!meals.length) {
     el.innerHTML = `<div class="empty">${s.emptyNoMeals}</div>`;
     return;
@@ -658,7 +702,7 @@ function renderMeals() {
     ? list
         .map(
           (m) => `
- <article class="meal">
+ <article class="meal" data-meal-id="${escapeAttr(m.id)}">
   <div class="meal-img${m.image ? "" : " no-img"}">
    ${
      m.image
@@ -672,11 +716,7 @@ function renderMeals() {
    <div class="desc">${escapeHtml(m.description || "")}</div>
    <div class="meal-bottom">
     <span class="price">${money(m.price)}</span>
-    ${
-      cart[m.id]
-        ? qtyControl(m, s)
-        : `<button type="button" class="add" aria-label="${escapeAttr(s.addBtn + " — " + m.name)}" onclick="add('${m.id}')">${s.addBtn}</button>`
-    }
+    <div class="meal-ctrl">${mealCtrlHtml(m, s)}</div>
    </div>
   </div>
  </article>`
@@ -724,10 +764,10 @@ function renderCart() {
     <div class="cart-info"><b>${escapeHtml(i.name)}</b><small>${money(i.price)} ${s.perDish}</small></div>
     <div class="cart-ctrl">
       <div class="qty" role="group" aria-label="${escapeAttr(i.name)}">
-        <button type="button" aria-label="${escapeAttr(s.minusAria(i.name))}" onclick="remove('${i.id}')">−</button><b aria-live="polite">${i.qty}</b><button type="button" class="plus" aria-label="${escapeAttr(s.plusAria(i.name))}" onclick="add('${i.id}')">+</button>
+        <button type="button" aria-label="${escapeAttr(s.minusAria(i.name))}" onclick="remove(${jsArg(i.id)})">−</button><b aria-live="polite">${i.qty}</b><button type="button" class="plus" aria-label="${escapeAttr(s.plusAria(i.name))}" onclick="add(${jsArg(i.id)})">+</button>
       </div>
       <span class="cart-line" aria-label="${escapeAttr(s.lineTotal)}">${money(i.price * i.qty)}</span>
-      <button type="button" class="trash-btn" aria-label="${escapeAttr(s.removeAria(i.name))}" onclick="removeAll('${i.id}')">${ico("trash")}</button>
+      <button type="button" class="trash-btn" aria-label="${escapeAttr(s.removeAria(i.name))}" onclick="removeAll(${jsArg(i.id)})">${ico("trash")}</button>
     </div>
   </div>`
     )
@@ -744,7 +784,7 @@ function renderCart() {
 }
 function choosePlan(p) {
   plan = p;
-  render();
+  renderCart();
 }
 function render() {
   renderCategories();
@@ -936,7 +976,7 @@ function scheduleCalendarHtml() {
   const first = new Date(year, month, 1);
   const startWeekday = first.getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = todayISO();
   const monthLabel = first.toLocaleDateString(lang === "fr" ? "fr-FR" : "ar-MA", { month: "long", year: "numeric" });
   const now = new Date();
   const atCurrentMonth = year === now.getFullYear() && month === now.getMonth();
@@ -1032,7 +1072,7 @@ function setupScheduleDefaults() {
     for (let i = 0; i < p.days; i++) {
       const d = new Date(today);
       d.setDate(d.getDate() + i);
-      selectedScheduleDates.push(d.toISOString().slice(0, 10));
+      selectedScheduleDates.push(isoOf(d));
     }
   }
   refreshScheduleCalendar();
@@ -1050,7 +1090,7 @@ function updateSchedulePreview() {
     return;
   }
   const sorted = [...selectedScheduleDates].sort();
-  const list = sorted.map((d) => formatDate(new Date(d + "T00:00:00"))).join("، ");
+  const list = sorted.map((d) => formatDate(new Date(d + "T00:00:00"))).join(lang === "fr" ? ", " : "، ");
   box.innerHTML = s.schedulePreviewDays(sorted.length, list, time);
 }
 
@@ -1084,7 +1124,8 @@ function useMyLocation() {
       if (mapLinkField) mapLinkField.value = `https://www.google.com/maps?q=${latitude},${longitude}`;
       try {
         const res = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=${lang}&zoom=18`
+          `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=${lang}&zoom=18`,
+          { signal: typeof AbortSignal !== "undefined" && AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined }
         );
         const data = await res.json();
         field.value = data.display_name || `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`;
@@ -1110,8 +1151,10 @@ function useMyLocation() {
   );
 }
 
+let orderSubmitting = false;
 async function submitOrder(e) {
   e.preventDefault();
+  if (orderSubmitting) return; // كيمنع إرسال نفس الطلب مرتين إلا تكرار الضغط
   const s = t(lang);
   // الطلب كيتطلب حساب مسجل (قواعد Firestore كتفرض هادشي): إلا سالات الجلسة والنموذج مازال مفتوح، نرجعو الزبون لتسجيل الدخول والسلة كتبقى محفوظة
   if (!currentUser) {
@@ -1155,6 +1198,7 @@ async function submitOrder(e) {
     return;
   }
 
+  orderSubmitting = true;
   const submitBtn = e.target.querySelector('button[type="submit"]');
   if (submitBtn) {
     submitBtn.disabled = true;
@@ -1191,9 +1235,19 @@ async function submitOrder(e) {
 
   try {
     const ref = await addDoc(collection(db, "orders"), order);
-    await maybeCreateMembership(order, ref.id);
+    // هاد العمليات جانبية: إلا فشلت وحدة فيهم، الطلب يبقى مسجّل والمجموع محسوب —
+    // ما نكذبوش على الزبون برسالة خطأ وهو طلبو وصل فعلاً.
+    try {
+      await maybeCreateMembership(order, ref.id);
+    } catch (e) {
+      console.warn("membership:", e);
+    }
     if (currentUser) {
-      await awardOrderPoints(currentUser.uid, order, ref.id);
+      try {
+        await awardOrderPoints(currentUser.uid, order, ref.id);
+      } catch (e) {
+        console.warn("points:", e);
+      }
     }
     // نحفظو معلومات الزبون (الاسم والعنوان) فحسابو باش تتعبى تلقائياً فالمرة الجاية
     if (currentUser) {
@@ -1205,9 +1259,11 @@ async function submitOrder(e) {
       }
     }
     cart = {};
+    saveCart();
     selectedScheduleDates = [];
     scheduleCalendarMonth = null;
     render();
+    orderSubmitting = false;
     // حالة تأكيد الطلب فنفس النافذة (ما كتتمسحش ملي كيتحدثو الأطباق)
     const box = document.getElementById("checkoutContent");
     box.innerHTML = `
@@ -1222,6 +1278,8 @@ async function submitOrder(e) {
      </div>`;
     box.scrollTop = 0;
   } catch (err) {
+    orderSubmitting = false;
+    console.error("submitOrder:", err);
     toast(s.orderError, "error");
     if (submitBtn) {
       submitBtn.disabled = false;
@@ -1316,7 +1374,7 @@ async function awardOrderPoints(uid, order, orderId) {
   const newOrderCount = orderCountBefore + 1;
   const isFirstOrder = orderCountBefore === 0;
 
-  const monthKey = new Date().toISOString().slice(0, 7); // "YYYY-MM"
+  const monthKey = todayISO().slice(0, 7); // "YYYY-MM" (بالتوقيت المحلي)
   const sameMonth = profile.lastOrderMonthKey === monthKey;
   const ordersThisMonth = (sameMonth ? profile.ordersThisMonth || 0 : 0) + 1;
 
@@ -1446,7 +1504,7 @@ async function renderMyOrdersList() {
         <div class="order-card-meta">${formatDate(o.schedule?.dateFrom || "")} · ${money(o.total)}</div>
         <div class="order-card-actions">
           <button type="button" class="copy-link-btn" data-copy="${escapeAttr(orderCode(o.id))}" onclick="copyOrderNumber(this)" style="border:0;background:#f0fdf4;color:#047857;border-radius:10px;padding:6px 12px;font-size:12px;font-weight:800;cursor:pointer">${s.copyOrderNumber}</button>
-          <button type="button" class="btn-outline-sm" onclick="openOrderDetail('${o.id}')">${s.orderDetailsBtn}</button>
+          <button type="button" class="btn-outline-sm" onclick="openOrderDetail(${jsArg(o.id)})">${s.orderDetailsBtn}</button>
         </div>
       </div>`
         )
@@ -1533,7 +1591,7 @@ async function renderRewardsPage() {
       ${r.description ? `<div class="reward-desc">${escapeHtml(r.description)}</div>` : ""}
       <div class="reward-bottom">
         <span class="reward-cost">${r.pointsCost} ${s.pointsLabel}</span>
-        <button class="add" ${balance < r.pointsCost ? "disabled style='opacity:.4;cursor:not-allowed'" : ""} onclick="redeemReward('${r.id}')">${s.redeemBtn}</button>
+        <button class="add" ${balance < r.pointsCost ? "disabled style='opacity:.4;cursor:not-allowed'" : ""} onclick="redeemReward(${jsArg(r.id)})">${s.redeemBtn}</button>
       </div>
     </div>`
         )
@@ -1665,7 +1723,7 @@ function openRateOrder(orderId) {
    <div class="modal-head"><h3>${s.rateModalTitle}</h3><button class="close" onclick="closeRateOrder()">${ico("close")}</button></div>
    <div id="starsRow" style="text-align:center;margin:16px 0"></div>
    <textarea id="rateComment" rows="2" placeholder="..."></textarea>
-   <button class="checkout" style="margin-top:14px" onclick="submitRating('${orderId}')">${s.rateSubmit}</button>`;
+   <button class="checkout" style="margin-top:14px" onclick="submitRating(${jsArg(orderId)})">${s.rateSubmit}</button>`;
   renderStars();
 }
 function renderStars() {
@@ -2742,7 +2800,21 @@ function subscribeMeals() {
     query(collection(db, "meals"), orderBy("name")),
     (snap) => {
       meals = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      // نحيّدو من السلة المحفوظة أي طبق/باقة ما بقاوش موجودين (تبدلو أو تحيدو من لوحة التحكم)
+      const valid = new Set(meals.map((m) => m.id));
+      let pruned = false;
+      Object.keys(cart).forEach((id) => {
+        if (id.startsWith("pack:")) {
+          if (!weeklyPackages[id.slice(5)]) delete cart[id], (pruned = true);
+        } else if (!valid.has(id)) {
+          delete cart[id];
+          pruned = true;
+        }
+      });
+      if (pruned) saveCart();
       render();
+      const grid = document.getElementById("meals");
+      if (grid) grid.setAttribute("aria-busy", "false");
     },
     () => {
       // ما كنبينوش أخطاء تقنية للزبون — رسالة مفهومة + زر إعادة المحاولة
@@ -2868,10 +2940,78 @@ onAuthStateChanged(auth, async (user) => {
   updateAccountButton();
 });
 
+/* ═══════ تحسينات الواجهة: ظهور تدريجي، زر العودة لأعلى، وتثبيت التطبيق (PWA) ═══════ */
+function setupReveal() {
+  const targets = document.querySelectorAll(".section-head, .trust-card, .how-card");
+  if (!("IntersectionObserver" in window)) return;
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduce) {
+    document.body.classList.add("no-reveal");
+    return;
+  }
+  targets.forEach((el, i) => {
+    el.classList.add("reveal");
+    el.style.transitionDelay = `${Math.min(i % 4, 3) * 60}ms`;
+  });
+  const io = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((en) => {
+        if (en.isIntersecting) {
+          en.target.classList.add("in");
+          io.unobserve(en.target);
+        }
+      });
+    },
+    { rootMargin: "0px 0px -8% 0px", threshold: 0.06 }
+  );
+  targets.forEach((el) => io.observe(el));
+}
+
+function setupBackToTop() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "to-top";
+  btn.setAttribute("aria-label", lang === "fr" ? "Retour en haut" : "العودة إلى أعلى الصفحة");
+  btn.textContent = "↑";
+  btn.addEventListener("click", () => window.scrollTo({ top: 0, behavior: "smooth" }));
+  document.body.appendChild(btn);
+  let ticking = false;
+  const sync = () => {
+    btn.classList.toggle("show", window.scrollY > 700);
+    ticking = false;
+  };
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!ticking) {
+        ticking = true;
+        requestAnimationFrame(sync);
+      }
+    },
+    { passive: true }
+  );
+  sync();
+}
+
+// تسجيل Service Worker: كيخلي الموقع يتثبت كتطبيق وكيتفتح بسرعة (وبلا إنترنت للأجزاء الثابتة)
+function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  const secure = location.protocol === "https:" || ["localhost", "127.0.0.1"].includes(location.hostname);
+  if (!secure) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {
+      /* فشل التسجيل ما كيأثرش على الموقع */
+    });
+  });
+}
+
 applyStaticText();
 renderCategories(); // كتبان الفئات فوراً، بلا ما تنتظر جواب Firestore ديال الأطباق
 renderCart();
 document.getElementById("year").textContent = new Date().getFullYear();
+setupReveal();
+setupBackToTop();
+registerServiceWorker();
 
 /* ---------- نظام النقاط: تحميل القواعد + التقاط رابط الدعوة ---------- */
 getDoc(doc(db, "config", "pointsRules"))
